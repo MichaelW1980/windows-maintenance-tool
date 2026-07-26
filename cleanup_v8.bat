@@ -2,7 +2,7 @@
 CLS
 setlocal EnableExtensions EnableDelayedExpansion
 
-:: Windows repair and component maintenance batch - v8
+:: Windows repair and component maintenance batch - v8.0.1
 
 set "DryRun=1"
 set "KeepWorkingFolder=0"
@@ -12,7 +12,7 @@ set "DryRunNoticeShown=0"
 net session >nul 2>&1
 if not "%errorlevel%"=="0" (
     echo Requesting administrator rights...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'cmd.exe' -ArgumentList '/k ""%~f0""' -Verb RunAs"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'cmd.exe' -ArgumentList '/d /c ""%~f0""' -Verb RunAs"
     exit /b
 )
 
