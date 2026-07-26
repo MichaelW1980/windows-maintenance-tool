@@ -1,4 +1,4 @@
-# Windows Repair and Component Maintenance Batch
+# Windows Maintenance Tool
 
 ## Summary
 
@@ -613,6 +613,8 @@ Successful validation provides confidence in the tested configuration but cannot
 ## 11. Copyright and license
 
 Copyright (C) 2026 MichaelW1980
+
+Additional contributions remain copyright of their respective contributors.
 
 This project is free software: you may redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, **version 3 only**.
 
