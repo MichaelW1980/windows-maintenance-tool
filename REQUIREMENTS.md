@@ -5,7 +5,11 @@ This file is a compact pre-run checklist for the Windows Repair and Component Ma
 ## Required environment
 
 - A supported Windows installation with DISM, SFC, CBS logging, and Windows PowerShell 5.1.
-- Administrator rights. The batch requests elevation through UAC.
+- Administrator rights. The batch requests elevation through UAC because it
+  accesses protected Windows servicing resources and, during real runs,
+  invokes DISM, SFC, component-store cleanup, Mode 3 shadow-copy deletion,
+  `/ResetBase`, and the icon-cache reset. The UAC prompt is also expected
+  during dry runs because elevation occurs when the batch starts.
 - `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` available.
 - `%SystemRoot%\System32\tar.exe` available for ZIP creation and archive inspection.
 - The following three executable files kept together in the same extracted folder:
@@ -18,6 +22,24 @@ This file is a compact pre-run checklist for the Windows Repair and Component Ma
 
 - A writable Desktop and Windows temporary-file location.
 - The package must be extracted before use. Do not run the batch from inside a ZIP viewer.
+
+## Windows security prompts
+
+On Windows 11, an **Open File - Security Warning** may appear before the UAC
+prompt when the downloaded ZIP or extracted batch retains Internet-zone
+information.
+
+Before selecting **Run**, confirm that the package came from the official
+release and verify the release asset against its published SHA-256 hash.
+
+The **Always ask before opening this file** checkbox controls whether Windows
+continues showing that warning for the extracted copy:
+
+- leave it selected to retain the warning;
+- clear it before selecting **Run** to suppress later warnings for that copy.
+
+Clearing the checkbox does not digitally sign the batch and does not suppress
+the separate UAC prompt. See `README.md` for the full explanation.
 
 ## Dry-run default
 
