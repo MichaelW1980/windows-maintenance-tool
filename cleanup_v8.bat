@@ -2,7 +2,7 @@
 CLS
 setlocal EnableExtensions EnableDelayedExpansion
 
-:: Windows repair and component maintenance batch - v8.0.1
+:: Windows repair and component maintenance batch - v8.0.2
 
 set "DryRun=1"
 set "KeepWorkingFolder=0"
@@ -206,14 +206,20 @@ echo uninstall paths. Future Windows updates are not blocked.
 echo.
 if "%DryRun%"=="1" echo DRY RUN: Shadow-copy purge and ResetBase commands will be skipped.
 echo.
-choice /c YN /n /m "Continue to typed confirmation? [Y/N]: "
+choice /c YN /n /m "Continue to final confirmation? [Y/N]: "
 if errorlevel 2 goto MENU
 
+CLS
+echo ==================================================
+echo              FINAL CONFIRMATION
+echo ==================================================
 echo.
-echo FINAL CONFIRMATION:
-echo Successfully deleted shadow copies will no longer be available,
-echo and ResetBase removes former uninstall paths for Windows update
-echo packages incorporated into the new component-store baseline.
+echo Successfully deleted shadow copies will no longer
+echo be available.
+echo.
+echo ResetBase removes former uninstall paths for Windows
+echo update packages incorporated into the new component-
+echo store baseline.
 echo.
 echo To start this extended cleanup mode, type exactly:
 echo.
