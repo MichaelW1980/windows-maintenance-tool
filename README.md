@@ -85,9 +85,61 @@ set "KeepWorkingFolder=1"
 
 The working folder is preserved automatically whenever capture, report generation, archive creation, or archive validation fails, regardless of this setting.
 
+### Windows may show an Open File security warning
+
+On Windows 11, Windows may display an **Open File - Security Warning**
+before the UAC prompt when the downloaded archive or extracted batch file
+retains Internet-zone information.
+
+Whether the warning appears depends on how the package was downloaded,
+extracted, copied, or unblocked, and on the system's Attachment Manager
+and security-policy configuration.
+
+The warning may state that the publisher could not be verified because the
+batch file does not have a digital signature identifying a verified
+publisher. This warning does not by itself indicate that the release archive
+has been modified.
+
+Before selecting **Run**:
+
+1. confirm that the package came from the official project release;
+2. verify the release asset against its published SHA-256 hash; and
+3. review the batch file and accompanying documentation.
+
+The **Always ask before opening this file** checkbox controls whether Windows
+continues showing this warning for that extracted copy:
+
+- Leave the checkbox selected to retain the warning for later launches.
+- Clear the checkbox before selecting **Run** to stop Windows from showing
+  the warning on later launches of that copy.
+
+Clearing the checkbox does not digitally sign the batch, does not grant
+administrator rights, and does not suppress the separate UAC prompt.
+
+Do not clear the checkbox merely to bypass a warning for a file whose source
+or SHA-256 hash has not been verified.
+
 ### Administrator rights are required
 
-The batch requests elevation through UAC when necessary and relaunches itself in an elevated Command Prompt.
+The batch requests elevation through User Account Control when necessary and
+relaunches itself in an elevated Command Prompt.
+
+Administrator rights are required because the tool accesses protected Windows
+servicing resources and, during real runs, invokes commands that inspect or
+modify protected Windows state. These operations include:
+
+- DISM component-store health checks and repair;
+- component-store cleanup and `/ResetBase`;
+- System File Checker;
+- access to Windows CBS servicing logs; and
+- shadow-copy deletion in Mode 3.
+
+The elevation check occurs when the batch starts. The UAC prompt is therefore
+expected during dry runs as well as during real maintenance runs.
+
+Dry-run mode skips the maintenance, cleanup, deletion, reset, and icon-cache
+commands, but it still exercises the elevated controller, CBS watcher
+coordination, report generation, and archive workflow.
 
 ### Mode 3 removes additional rollback resources
 
@@ -107,6 +159,10 @@ Mode 3 therefore requires:
 ```text
 DELETE SHADOW COPIES AND RESET COMPONENT BASE
 ```
+
+The technical warning and the final typed confirmation are displayed as two
+separate screens so that each warning and its associated selector remain
+fully visible.
 
 Do not use Mode 3 merely as a test.
 
@@ -178,10 +234,15 @@ All three real modes reset the icon cache near the end. Windows Explorer is term
    ```
 
 4. Run `cleanup_v8.bat`.
-5. Approve the UAC prompt.
-6. Read the dry-run notice and select a mode.
-7. Review the timestamped ZIP archive. If the run or packaging stage fails, review the retained timestamped working folder.
-8. Only after reviewing the scripts and dry-run behavior, change `DryRun=1` to `DryRun=0` for a real maintenance run.
+5. If Windows displays an **Open File - Security Warning**, confirm the
+   package source and published SHA-256 hash, decide whether Windows should
+   continue asking before opening that copy, and select **Run**.
+6. Approve the separate UAC prompt.
+7. Read the dry-run notice and select a mode.
+8. Review the timestamped ZIP archive. If the run or packaging stage fails,
+   review the retained timestamped working folder.
+9. Only after reviewing the scripts and dry-run behavior, change `DryRun=1`
+   to `DryRun=0` for a real maintenance run.
 
 ---
 
