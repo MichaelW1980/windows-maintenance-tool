@@ -2,9 +2,9 @@
 CLS
 setlocal EnableExtensions EnableDelayedExpansion
 
-:: Windows Maintenance Tool - v8.0.3.1 portability startup hotfix
+:: Windows Maintenance Tool - v8.0.3.2 standardized filenames
 
-set "DryRun=0"
+set "DryRun=1"
 set "KeepWorkingFolder=0"
 set "DryRunNoticeShown=0"
 set "OpenResultPrompt=1"
@@ -20,9 +20,9 @@ set "DismExe=%SystemRoot%\System32\Dism.exe"
 set "SfcExe=%SystemRoot%\System32\sfc.exe"
 set "VssAdminExe=%SystemRoot%\System32\vssadmin.exe"
 set "ExplorerExe=%SystemRoot%\explorer.exe"
-set "CBSWatcherScript=%ScriptDirectory%Watch-CBSLog.ps1"
-set "CBSRunAnalyzer=%ScriptDirectory%Analyze-CBSRun.ps1"
-set "ArchiveScript=%ScriptDirectory%New-MaintenanceArchive.ps1"
+set "CBSWatcherScript=%ScriptDirectory%Capture-CBSLog.ps1"
+set "CBSRunAnalyzer=%ScriptDirectory%Analyze-CBSLog.ps1"
+set "ArchiveScript=%ScriptDirectory%Create-MaintenanceArchive.ps1"
 
 :: Request administrator rights if needed and preserve supported switches.
 net session >nul 2>&1
