@@ -2,35 +2,58 @@
 CLS
 setlocal EnableExtensions EnableDelayedExpansion
 
-:: Windows repair and component maintenance batch - v8.0.2
+:: Windows Maintenance Tool - v8.0.3.1 portability startup hotfix
 
-set "DryRun=1"
+set "DryRun=0"
 set "KeepWorkingFolder=0"
 set "DryRunNoticeShown=0"
+set "OpenResultPrompt=1"
+set "FinalExitCode=0"
 
-:: Request administrator rights if needed.
+:: /no-open-prompt suppresses only the final Explorer prompt. The maintenance
+:: mode selection and destructive-operation confirmations remain interactive.
+if /i "%~1"=="/no-open-prompt" set "OpenResultPrompt=0"
+
+set "ScriptDirectory=%~dp0"
+set "PowerShellExe=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+set "DismExe=%SystemRoot%\System32\Dism.exe"
+set "SfcExe=%SystemRoot%\System32\sfc.exe"
+set "VssAdminExe=%SystemRoot%\System32\vssadmin.exe"
+set "ExplorerExe=%SystemRoot%\explorer.exe"
+set "CBSWatcherScript=%ScriptDirectory%Watch-CBSLog.ps1"
+set "CBSRunAnalyzer=%ScriptDirectory%Analyze-CBSRun.ps1"
+set "ArchiveScript=%ScriptDirectory%New-MaintenanceArchive.ps1"
+
+:: Request administrator rights if needed and preserve supported switches.
 net session >nul 2>&1
 if not "%errorlevel%"=="0" (
+    if not exist "%PowerShellExe%" (
+        echo ERROR: Windows PowerShell was not found. Administrator rights cannot be requested.
+        echo %PowerShellExe%
+        endlocal
+        exit /b 1
+    )
     echo Requesting administrator rights...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath 'cmd.exe' -ArgumentList '/d /c ""%~f0""' -Verb RunAs"
-    exit /b
+    set "ElevationArguments=/d /c ""%~f0"" %*"
+    "%PowerShellExe%" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "Start-Process -FilePath $env:ComSpec -ArgumentList $env:ElevationArguments -Verb RunAs -ErrorAction Stop"
+    set "ElevationError=!errorlevel!"
+    endlocal & exit /b !ElevationError!
 )
 
-set "DesktopPath=%USERPROFILE%\Desktop"
-set "CBSWatcherScript=%~dp0Watch-CBSLog.ps1"
-set "CBSRunAnalyzer=%~dp0Analyze-CBSRun.ps1"
-set "TarExe=%SystemRoot%\System32\tar.exe"
-set "CBSStopSignal=%TEMP%\cleanup_cbs_stop_%RANDOM%_%RANDOM%.signal"
-set "CBSReadySignal=%TEMP%\cleanup_cbs_ready_%RANDOM%_%RANDOM%.signal"
-set "CBSDoneSignal=%TEMP%\cleanup_cbs_done_%RANDOM%_%RANDOM%.signal"
-set "ArchiveTimestampFile=%TEMP%\cleanup_archive_timestamp_%RANDOM%_%RANDOM%.txt"
+call :INITIALIZE_ENVIRONMENT
+if errorlevel 1 goto INITIALIZATION_FAILED
+
 set "CBSCaptureStarted=0"
+set "CBSCaptureLaunched=0"
 set "RunPrepared=0"
 set "ArchiveValidated=0"
 set "WorkingFolderRemoved=0"
 set "WorkingFolder="
 set "RunBaseName="
 set "ArchivePath="
+set "CBSStopSignal="
+set "CBSReadySignal="
+set "CBSDoneSignal="
 
 if "%DryRun%"=="1" if "%DryRunNoticeShown%"=="0" (
     call :SHOW_DRYRUN_NOTICE
@@ -61,8 +84,7 @@ echo.
 echo [3] Repair + Shadow Copy Purge + Component Base Reset
 echo     - DISM ScanHealth
 echo     - DISM RestoreHealth
-echo     - Attempt vssadmin shadow-copy purge on C:
-echo     - Attempt vssadmin shadow-copy purge on D:
+echo     - Attempt vssadmin shadow-copy purge on the Windows system volume
 echo     - DISM StartComponentCleanup /ResetBase
 echo     - SFC scan
 echo     - Icon cache reset
@@ -189,9 +211,9 @@ echo.
 echo Technical warning:
 echo.
 echo This mode attempts to delete client-accessible shadow copies
-echo for configured volumes using vssadmin.
+echo on the resolved Windows system volume using vssadmin.
 echo.
-echo Configured shadow-copy purge targets: C: and D:
+echo Configured shadow-copy purge target: %ShadowPurgeVolumes%
 echo.
 echo Then it runs:
 echo.
@@ -233,7 +255,7 @@ if /i "%ConfirmText%"=="DELETE SHADOW COPIES AND RESET COMPONENT BASE" goto COMP
 
 echo.
 echo Extended cleanup mode not confirmed. Returning to selection menu.
-pause
+choice /c C /n /m "Press C to continue: " >nul
 goto MENU
 
 :COMPONENT_BASE_RESET_MODE
@@ -288,7 +310,7 @@ if "%DryRun%"=="1" (
     echo DRY RUN: Skipping DISM ScanHealth.
     set "LastError=0"
 ) else (
-    Dism /Online /Cleanup-Image /ScanHealth
+    "%DismExe%" /Online /Cleanup-Image /ScanHealth
     set "LastError=!errorlevel!"
 )
 >> "%MaintenanceLog%" echo ScanHealth exit code: !LastError! at %date% %time%
@@ -301,7 +323,7 @@ if "%DryRun%"=="1" (
     echo DRY RUN: Skipping DISM RestoreHealth.
     set "LastError=0"
 ) else (
-    Dism /Online /Cleanup-Image /RestoreHealth
+    "%DismExe%" /Online /Cleanup-Image /RestoreHealth
     set "LastError=!errorlevel!"
 )
 >> "%MaintenanceLog%" echo RestoreHealth exit code: !LastError! at %date% %time%
@@ -314,7 +336,7 @@ if "%DryRun%"=="1" (
     echo DRY RUN: Skipping DISM StartComponentCleanup.
     set "LastError=0"
 ) else (
-    Dism /Online /Cleanup-Image /StartComponentCleanup
+    "%DismExe%" /Online /Cleanup-Image /StartComponentCleanup
     set "LastError=!errorlevel!"
 )
 >> "%MaintenanceLog%" echo StartComponentCleanup exit code: !LastError! at %date% %time%
@@ -324,27 +346,30 @@ exit /b 0
 echo.
 echo [%~1] Attempting shadow-copy purge ^(vssadmin^)...
 >> "%ResetBaseLog%" echo Shadow-copy purge command started: %date% %time%
->> "%ResetBaseLog%" echo Configured purge targets: C: and D:
-if "%DryRun%"=="1" (
-    echo DRY RUN: Skipping shadow-copy purge for C: and D:.
-    >> "%ResetBaseLog%" echo Command skipped: vssadmin delete shadows /for=C: /all /quiet
-    >> "%ResetBaseLog%" echo Command skipped: vssadmin delete shadows /for=D: /all /quiet
-    set "ShadowPurgeC=0"
-    set "ShadowPurgeD=0"
-) else (
-    >> "%ResetBaseLog%" echo Command: vssadmin delete shadows /for=C: /all /quiet
-    vssadmin delete shadows /for=C: /all /quiet
-    set "ShadowPurgeC=!errorlevel!"
+>> "%ResetBaseLog%" echo Configured purge target: %ShadowPurgeVolumes%
 
-    >> "%ResetBaseLog%" echo Command: vssadmin delete shadows /for=D: /all /quiet
-    vssadmin delete shadows /for=D: /all /quiet
-    set "ShadowPurgeD=!errorlevel!"
+if not "%VssAdminAvailable%"=="1" (
+    echo WARNING: vssadmin.exe is unavailable. Shadow-copy purge is not applicable.
+    >> "%ResetBaseLog%" echo Shadow-copy purge not applicable: vssadmin.exe unavailable.
+    >> "%MaintenanceLog%" echo Shadow-copy purge not applicable: vssadmin.exe unavailable at %date% %time%
+    exit /b 0
 )
+
+for %%V in (%ShadowPurgeVolumes%) do (
+    if "%DryRun%"=="1" (
+        echo DRY RUN: Skipping shadow-copy purge for %%V.
+        >> "%ResetBaseLog%" echo Command skipped: vssadmin delete shadows /for=%%V /all /quiet
+        set "ShadowPurgeError=0"
+    ) else (
+        >> "%ResetBaseLog%" echo Command: vssadmin delete shadows /for=%%V /all /quiet
+        "%VssAdminExe%" delete shadows /for=%%V /all /quiet
+        set "ShadowPurgeError=!errorlevel!"
+    )
+    >> "%ResetBaseLog%" echo Shadow-copy purge %%V exit code: !ShadowPurgeError!
+    >> "%MaintenanceLog%" echo Shadow-copy purge %%V exit code: !ShadowPurgeError! at %date% %time%
+)
+
 >> "%ResetBaseLog%" echo Shadow-copy purge command completed: %date% %time%
->> "%ResetBaseLog%" echo Shadow-copy purge C: exit code: !ShadowPurgeC!
->> "%ResetBaseLog%" echo Shadow-copy purge D: exit code: !ShadowPurgeD!
->> "%MaintenanceLog%" echo Shadow-copy purge C: exit code: !ShadowPurgeC! at %date% %time%
->> "%MaintenanceLog%" echo Shadow-copy purge D: exit code: !ShadowPurgeD! at %date% %time%
 exit /b 0
 
 :RUN_RESETBASE
@@ -356,7 +381,7 @@ if "%DryRun%"=="1" (
     echo DRY RUN: Skipping DISM StartComponentCleanup /ResetBase.
     set "LastError=0"
 ) else (
-    Dism /Online /Cleanup-Image /StartComponentCleanup /ResetBase
+    "%DismExe%" /Online /Cleanup-Image /StartComponentCleanup /ResetBase
     set "LastError=!errorlevel!"
 )
 >> "%ResetBaseLog%" echo ResetBase command completed: %date% %time%
@@ -371,7 +396,7 @@ if "%DryRun%"=="1" (
     echo DRY RUN: Skipping SFC /scannow.
     set "LastError=0"
 ) else (
-    sfc /scannow
+    "%SfcExe%" /scannow
     set "LastError=!errorlevel!"
 )
 >> "%MaintenanceLog%" echo SFC exit code: !LastError! at %date% %time%
@@ -391,26 +416,17 @@ if not exist "%CBSRunAnalyzer%" (
     exit /b 1
 )
 
-if not exist "%TarExe%" (
-    echo ERROR: Required Windows archive utility was not found:
-    echo %TarExe%
+if not exist "%ArchiveScript%" (
+    echo ERROR: Required archive script was not found:
+    echo %ArchiveScript%
     exit /b 1
 )
 
 set "RunTimestamp="
-del "%ArchiveTimestampFile%" >nul 2>&1
-"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -Command "[DateTime]::Now.ToString('yyyy-MM-dd_HH-mm-ss') | Set-Content -LiteralPath $env:ArchiveTimestampFile -Encoding ASCII"
-if errorlevel 1 (
-    echo ERROR: Could not generate the run timestamp.
-    del "%ArchiveTimestampFile%" >nul 2>&1
-    exit /b 1
-)
-
-if exist "%ArchiveTimestampFile%" set /p "RunTimestamp="<"%ArchiveTimestampFile%"
-del "%ArchiveTimestampFile%" >nul 2>&1
+for /f "delims=" %%I in ('^""%PowerShellExe%" -NoLogo -NoProfile -NonInteractive -Command "Get-Date -Format yyyy-MM-dd_HH-mm-ss"^"') do if not defined RunTimestamp set "RunTimestamp=%%I"
 
 if not defined RunTimestamp (
-    echo ERROR: The generated run timestamp could not be read.
+    echo ERROR: The run timestamp could not be generated.
     exit /b 1
 )
 
@@ -419,7 +435,7 @@ set "RunBaseName=!RunBaseStem!"
 set /a "RunCollisionIndex=0"
 
 :CHECK_RUN_NAME_COLLISION
-if not exist "%DesktopPath%\!RunBaseName!" if not exist "%DesktopPath%\!RunBaseName!.zip" goto RUN_NAME_AVAILABLE
+if not exist "%ReportsRoot%\!RunBaseName!" if not exist "%ReportsRoot%\!RunBaseName!.zip" goto RUN_NAME_AVAILABLE
 set /a "RunCollisionIndex+=1"
 if !RunCollisionIndex! GTR 99 (
     echo ERROR: Could not find an unused timestamped report name.
@@ -434,8 +450,14 @@ set "RunBaseName=!RunBaseStem!_!RunCollisionSuffix!"
 goto CHECK_RUN_NAME_COLLISION
 
 :RUN_NAME_AVAILABLE
-set "WorkingFolder=%DesktopPath%\!RunBaseName!"
-set "ArchivePath=%DesktopPath%\!RunBaseName!.zip"
+set "WorkingFolder=%ReportsRoot%\!RunBaseName!"
+set "ArchivePath=%ReportsRoot%\!RunBaseName!.zip"
+set "RunControlStem=cleanup_cbs_!RunTimestamp!_!RANDOM!_!RANDOM!"
+set "CBSStopSignal=%RuntimeRoot%\!RunControlStem!_stop.signal"
+set "CBSReadySignal=%RuntimeRoot%\!RunControlStem!_ready.signal"
+set "CBSDoneSignal=%RuntimeRoot%\!RunControlStem!_done.signal"
+del "!CBSStopSignal!" "!CBSReadySignal!" "!CBSDoneSignal!" >nul 2>&1
+
 mkdir "!WorkingFolder!" >nul 2>&1
 if errorlevel 1 (
     echo ERROR: Could not create the timestamped working folder:
@@ -468,7 +490,7 @@ if not exist "%CBSRunAnalyzer%" (
 )
 
 del "%DISMRepairLog%" "%CleanupLog%" "%CleanupContentRetentionLog%" "%SFCLog%" >nul 2>&1
-"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%CBSRunAnalyzer%" -SourceLog "%CBSRunLog%" -Mode "%MaintenanceModeNumber%" -DISMRepairLog "%DISMRepairLog%" -CleanupLog "%CleanupLog%" -ContentRetentionLog "%CleanupContentRetentionLog%" -SFCLog "%SFCLog%"
+"%PowerShellExe%" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%CBSRunAnalyzer%" -SourceLog "%CBSRunLog%" -Mode "%MaintenanceModeNumber%" -DISMRepairLog "%DISMRepairLog%" -CleanupLog "%CleanupLog%" -ContentRetentionLog "%CleanupContentRetentionLog%" -SFCLog "%SFCLog%"
 set "CBSAnalyzerError=!errorlevel!"
 >> "%MaintenanceLog%" echo CBS run analyzer exit code: !CBSAnalyzerError! at %date% %time%
 
@@ -524,7 +546,13 @@ del "%CBSStopSignal%" "%CBSReadySignal%" "%CBSDoneSignal%" >nul 2>&1
 
 echo.
 echo Starting run-scoped CBS capture...
-start "CBS Run Capture" /b "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%CBSWatcherScript%" -SourcePath "%windir%\Logs\CBS\CBS.log" -DestinationPath "%CBSRunLog%" -StopSignalPath "%CBSStopSignal%" -ReadySignalPath "%CBSReadySignal%" -DoneSignalPath "%CBSDoneSignal%"
+start "CBS Run Capture" /b "%PowerShellExe%" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%CBSWatcherScript%" -SourcePath "%windir%\Logs\CBS\CBS.log" -DestinationPath "%CBSRunLog%" -StopSignalPath "%CBSStopSignal%" -ReadySignalPath "%CBSReadySignal%" -DoneSignalPath "%CBSDoneSignal%"
+if errorlevel 1 (
+    echo ERROR: The CBS watcher process could not be launched.
+    >> "%MaintenanceLog%" echo CBS capture launch failed at %date% %time%
+    exit /b 1
+)
+set "CBSCaptureLaunched=1"
 
 set /a "CBSWaitCount=0"
 :WAIT_FOR_CBS_READY
@@ -553,7 +581,7 @@ echo ERROR: CBS capture did not become ready.
 exit /b 1
 
 :STOP_CBS_CAPTURE
-if not "%CBSCaptureStarted%"=="1" exit /b 0
+if not "%CBSCaptureLaunched%"=="1" exit /b 0
 
 echo.
 echo Stopping and flushing run-scoped CBS capture...
@@ -569,6 +597,7 @@ goto WAIT_FOR_CBS_DONE
 
 :CBS_CAPTURE_DONE
 set "CBSCaptureStarted=0"
+set "CBSCaptureLaunched=0"
 >> "%MaintenanceLog%" echo CBS run capture stopped and flushed: %date% %time%
 del "%CBSStopSignal%" "%CBSReadySignal%" "%CBSDoneSignal%" >nul 2>&1
 exit /b 0
@@ -583,6 +612,7 @@ call :ANALYZE_CBS_RUN
 exit /b %errorlevel%
 
 :CAPTURE_START_FAILED
+call :STOP_CBS_CAPTURE
 echo.
 echo Maintenance was not started because run-scoped CBS capture failed.
 echo No DISM, SFC, cleanup, shadow-copy, or icon-cache command was run.
@@ -591,14 +621,18 @@ if defined WorkingFolder (
     echo The timestamped working folder was preserved:
     echo !WorkingFolder!
 )
-pause
+set "FinalExitCode=1"
+call :PROMPT_OPEN_RESULT
 goto END
 
 :WORKSPACE_PREPARE_FAILED
 echo.
 echo Maintenance was not started because the run workspace could not be prepared.
 echo No DISM, SFC, cleanup, shadow-copy, or icon-cache command was run.
-pause
+echo.
+echo Required report root:
+echo %ReportsRoot%
+set "FinalExitCode=1"
 goto END
 
 
@@ -621,42 +655,18 @@ if exist "%ArchivePath%" (
 
 >> "%MaintenanceLog%" echo Archive target: %ArchivePath%
 
-pushd "%DesktopPath%" >nul 2>&1
-if errorlevel 1 (
-    echo WARNING: Could not access the Desktop for archive creation.
-    >> "%MaintenanceLog%" echo Archive creation failed: Desktop path unavailable at %date% %time%
-    exit /b 1
-)
-
-"%TarExe%" -caf "%ArchivePath%" "%RunBaseName%"
+"%PowerShellExe%" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "%ArchiveScript%" -SourcePath "%WorkingFolder%" -DestinationPath "%ArchivePath%" -ExpectedFiles "%ExpectedArchiveFiles%"
 set "ArchiveError=!errorlevel!"
-popd >nul 2>&1
 
 if not "!ArchiveError!"=="0" (
-    echo WARNING: ZIP archive creation failed with exit code !ArchiveError!.
-    >> "%MaintenanceLog%" echo Archive creation failed with exit code !ArchiveError! at %date% %time%
+    echo WARNING: ZIP archive creation or validation failed with exit code !ArchiveError!.
+    >> "%MaintenanceLog%" echo Archive creation or validation failed with exit code !ArchiveError! at %date% %time%
     exit /b 1
 )
 
 if not exist "%ArchivePath%" (
-    echo WARNING: The archive command returned success, but the ZIP was not found.
-    >> "%MaintenanceLog%" echo Archive creation failed: output file missing at %date% %time%
-    exit /b 1
-)
-
-"%TarExe%" -tf "%ArchivePath%" >nul 2>&1
-set "ArchiveListError=!errorlevel!"
-if not "!ArchiveListError!"=="0" (
-    echo WARNING: The ZIP archive could not be listed for validation.
-    >> "%MaintenanceLog%" echo Archive validation failed: tar list exit code !ArchiveListError! at %date% %time%
-    exit /b 1
-)
-
-"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.IO.Compression.FileSystem; $zip=[System.IO.Compression.ZipFile]::OpenRead($env:ArchivePath); try { $base=[System.IO.Path]::GetFileName($env:WorkingFolder.TrimEnd([char[]]'\\/')); $expected=@($env:ExpectedArchiveFiles -split '\|' | Where-Object { $_ }); $entries=@($zip.Entries | Where-Object { -not [string]::IsNullOrEmpty($_.Name) }); if ($entries.Count -ne $expected.Count) { throw ('Expected {0} file entries but found {1}.' -f $expected.Count,$entries.Count) }; $expectedPaths=@($expected | ForEach-Object { $base + '/' + $_ }); foreach ($name in $expected) { $wanted=$base + '/' + $name; $matches=@($entries | Where-Object { (($_.FullName -replace '\\','/').TrimStart([char[]]'./')) -ceq $wanted }); if ($matches.Count -ne 1) { throw ('Expected exactly one archive entry: ' + $wanted) }; $source=Join-Path -Path $env:WorkingFolder -ChildPath $name; if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw ('Source file missing during validation: ' + $source) }; $length=(Get-Item -LiteralPath $source).Length; if ($matches[0].Length -ne $length) { throw ('Length mismatch for ' + $wanted) } }; $unexpected=@($entries | Where-Object { $normalized=(($_.FullName -replace '\\','/').TrimStart([char[]]'./')); $expectedPaths -cnotcontains $normalized }); if ($unexpected.Count -ne 0) { throw ('Unexpected archive file entries: ' + (($unexpected | ForEach-Object FullName) -join ', ')) } } finally { $zip.Dispose() }"
-set "ArchiveValidationError=!errorlevel!"
-if not "!ArchiveValidationError!"=="0" (
-    echo WARNING: ZIP archive validation failed with exit code !ArchiveValidationError!.
-    >> "%MaintenanceLog%" echo Archive validation failed with exit code !ArchiveValidationError! at %date% %time%
+    echo WARNING: Archive validation returned success, but the ZIP was not found.
+    >> "%MaintenanceLog%" echo Archive validation failed: output file missing at %date% %time%
     exit /b 1
 )
 
@@ -727,11 +737,48 @@ if "%DryRun%"=="1" (
     >> "%MaintenanceLog%" echo Icon cache reset skipped by DryRun at %date% %time%
     exit /b 0
 )
-taskkill /f /im explorer.exe >nul 2>&1
-cd /d "%USERPROFILE%\AppData\Local\Microsoft\Windows\Explorer" 2>nul
-del /f /s /q iconcache_*.db >nul 2>&1
-"%windir%\System32\ie4uinit.exe" -show >nul 2>&1
-start "" "%windir%\explorer.exe"
+
+if not exist "%IconCachePath%" (
+    echo Icon cache reset not applicable: cache directory was not found.
+    >> "%MaintenanceLog%" echo Icon cache reset not applicable: directory missing at %date% %time%
+    exit /b 0
+)
+
+dir /b /a-d "%IconCachePath%\iconcache_*.db" >nul 2>&1
+if errorlevel 1 (
+    echo Icon cache reset not applicable: no icon cache database files were found.
+    >> "%MaintenanceLog%" echo Icon cache reset not applicable: no matching files at %date% %time%
+    exit /b 0
+)
+
+set "ExplorerWasRunning=0"
+"%SystemRoot%\System32\tasklist.exe" /fi "imagename eq explorer.exe" 2>nul | "%SystemRoot%\System32\find.exe" /i "explorer.exe" >nul 2>&1
+if not errorlevel 1 set "ExplorerWasRunning=1"
+
+if "!ExplorerWasRunning!"=="1" (
+    "%SystemRoot%\System32\taskkill.exe" /f /im explorer.exe >nul 2>&1
+)
+
+pushd "%IconCachePath%" >nul 2>&1
+if errorlevel 1 (
+    echo WARNING: Icon cache directory became unavailable.
+    >> "%MaintenanceLog%" echo Icon cache reset failed: directory unavailable at %date% %time%
+    exit /b 1
+)
+
+del /f /q iconcache_*.db >nul 2>&1
+set "IconCacheDeleteError=!errorlevel!"
+popd >nul 2>&1
+
+if exist "%SystemRoot%\System32\ie4uinit.exe" "%SystemRoot%\System32\ie4uinit.exe" -show >nul 2>&1
+if "!ExplorerWasRunning!"=="1" if exist "%ExplorerExe%" start "" "%ExplorerExe%" >nul 2>&1
+
+if not "!IconCacheDeleteError!"=="0" (
+    echo WARNING: One or more icon cache files could not be deleted.
+    >> "%MaintenanceLog%" echo Icon cache reset completed with deletion warnings at %date% %time%
+    exit /b 1
+)
+
 >> "%MaintenanceLog%" echo Icon cache reset completed at %date% %time%
 exit /b 0
 
@@ -764,11 +811,16 @@ set "LogCleanup=0"
 set "LogSFC=0"
 set "LogResetBase=0"
 set "RunPrepared=0"
+set "CBSCaptureStarted=0"
+set "CBSCaptureLaunched=0"
 set "ArchiveValidated=0"
 set "WorkingFolderRemoved=0"
 set "WorkingFolder="
 set "RunBaseName="
 set "ArchivePath="
+set "CBSStopSignal="
+set "CBSReadySignal="
+set "CBSDoneSignal="
 exit /b 0
 
 :FINALIZE
@@ -792,13 +844,14 @@ if "!FinalizationFailed!"=="0" (
     >> "%MaintenanceLog%" echo Archive creation skipped because finalization failed at %date% %time%
 )
 
-echo ==================================================
-echo MAINTENANCE COMPLETE.
-echo.
-echo Mode:
-echo - %MaintenanceMode%
-echo.
 if "%ArchiveValidated%"=="1" (
+    set "FinalExitCode=0"
+    echo ==================================================
+    echo MAINTENANCE AND REPORT FINALIZATION COMPLETED.
+    echo.
+    echo Mode:
+    echo - %MaintenanceMode%
+    echo.
     echo Validated ZIP archive:
     echo - %ArchivePath%
     if "%WorkingFolderRemoved%"=="1" (
@@ -810,6 +863,13 @@ if "%ArchiveValidated%"=="1" (
         echo - %WorkingFolder%
     )
 ) else (
+    set "FinalExitCode=1"
+    echo ==================================================
+    echo MAINTENANCE FINALIZATION INCOMPLETE.
+    echo.
+    echo Mode:
+    echo - %MaintenanceMode%
+    echo.
     echo WARNING: A validated ZIP archive was not completed.
     if exist "%ArchivePath%" (
         echo A partial or unvalidated archive may exist at:
@@ -820,14 +880,169 @@ if "%ArchiveValidated%"=="1" (
     echo - %WorkingFolder%
 )
 echo ==================================================
-pause
+call :PROMPT_OPEN_RESULT
 goto END
 
 :MENU_EXIT
 CLS
+set "FinalExitCode=0"
 goto END
 
+:INITIALIZATION_FAILED
+echo.
+echo ==================================================
+echo INITIALIZATION FAILED.
+echo.
+echo The tool could not initialize its required Local AppData paths or capabilities.
+echo No maintenance command was run, and no fallback location was used.
+echo ==================================================
+echo.
+echo Press any key to close this window.
+pause >nul
+set "FinalExitCode=1"
+goto END
+
+:PROMPT_OPEN_RESULT
+if not "%OpenResultPrompt%"=="1" exit /b 0
+if not "%ExplorerAvailable%"=="1" (
+    echo.
+    echo Explorer is unavailable, so the result folder cannot be opened automatically.
+    exit /b 0
+)
+
+if "%ArchiveValidated%"=="1" (
+    echo.
+    choice /c YN /n /m "Open the Reports folder? [Y/N]: "
+    if errorlevel 2 exit /b 0
+    "%ExplorerExe%" /select,"%ArchivePath%" >nul 2>&1
+    if errorlevel 1 echo NOTICE: Explorer could not select the archive. The maintenance result is unchanged.
+    exit /b 0
+)
+
+if defined WorkingFolder if exist "%WorkingFolder%" (
+    echo.
+    choice /c YN /n /m "Open the diagnostic folder? [Y/N]: "
+    if errorlevel 2 exit /b 0
+    "%ExplorerExe%" "%WorkingFolder%" >nul 2>&1
+    if errorlevel 1 echo NOTICE: Explorer could not open the diagnostic folder. The maintenance result is unchanged.
+)
+exit /b 0
+
+:INITIALIZE_ENVIRONMENT
+if not exist "%PowerShellExe%" (
+    echo ERROR: Windows PowerShell 5.1 was not found:
+    echo %PowerShellExe%
+    exit /b 1
+)
+
+"%PowerShellExe%" -NoLogo -NoProfile -NonInteractive -Command "if ($PSVersionTable.PSVersion.Major -ge 5) { exit 0 } else { exit 1 }" >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: Windows PowerShell 5.1 or later could not be confirmed.
+    exit /b 1
+)
+
+if not exist "%DismExe%" (
+    echo ERROR: DISM was not found:
+    echo %DismExe%
+    exit /b 1
+)
+if not exist "%SfcExe%" (
+    echo ERROR: SFC was not found:
+    echo %SfcExe%
+    exit /b 1
+)
+if not exist "%CBSWatcherScript%" (
+    echo ERROR: Required CBS watcher script was not found:
+    echo %CBSWatcherScript%
+    exit /b 1
+)
+if not exist "%CBSRunAnalyzer%" (
+    echo ERROR: Required CBS analyzer script was not found:
+    echo %CBSRunAnalyzer%
+    exit /b 1
+)
+if not exist "%ArchiveScript%" (
+    echo ERROR: Required archive script was not found:
+    echo %ArchiveScript%
+    exit /b 1
+)
+
+"%PowerShellExe%" -NoLogo -NoProfile -NonInteractive -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem; [void][System.IO.Compression.ZipFile]" >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: The required .NET ZIP capability is unavailable.
+    exit /b 1
+)
+
+set "LocalApplicationData="
+for /f "delims=" %%I in ('^""%PowerShellExe%" -NoLogo -NoProfile -NonInteractive -Command "[Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)"^"') do if not defined LocalApplicationData set "LocalApplicationData=%%I"
+if not defined LocalApplicationData (
+    echo ERROR: Windows Local Application Data could not be resolved.
+    exit /b 1
+)
+
+"%PowerShellExe%" -NoLogo -NoProfile -NonInteractive -Command "if ([string]::IsNullOrWhiteSpace($env:LocalApplicationData) -or -not [System.IO.Path]::IsPathRooted($env:LocalApplicationData)) { exit 1 }" >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: Windows Local Application Data did not resolve to a rooted path:
+    echo %LocalApplicationData%
+    exit /b 1
+)
+
+set "ToolDataRoot=%LocalApplicationData%\Windows Maintenance Tool"
+set "ReportsRoot=%ToolDataRoot%\Reports"
+set "RuntimeRoot=%ToolDataRoot%\Runtime"
+set "IconCachePath=%LocalApplicationData%\Microsoft\Windows\Explorer"
+set "ShadowPurgeVolumes=%SystemDrive%"
+
+mkdir "%ReportsRoot%" >nul 2>&1
+if errorlevel 1 if not exist "%ReportsRoot%" (
+    echo ERROR: The Reports directory could not be created:
+    echo %ReportsRoot%
+    echo No fallback destination will be used.
+    exit /b 1
+)
+
+mkdir "%RuntimeRoot%" >nul 2>&1
+if errorlevel 1 if not exist "%RuntimeRoot%" (
+    echo ERROR: The runtime directory could not be created:
+    echo %RuntimeRoot%
+    echo No fallback destination will be used.
+    exit /b 1
+)
+
+call :VERIFY_WRITABLE_DIRECTORY "%ReportsRoot%"
+if errorlevel 1 (
+    echo ERROR: The Reports directory is not writable:
+    echo %ReportsRoot%
+    echo No fallback destination will be used.
+    exit /b 1
+)
+
+call :VERIFY_WRITABLE_DIRECTORY "%RuntimeRoot%"
+if errorlevel 1 (
+    echo ERROR: The runtime directory is not writable:
+    echo %RuntimeRoot%
+    echo No fallback destination will be used.
+    exit /b 1
+)
+
+set "ExplorerAvailable=0"
+if exist "%ExplorerExe%" set "ExplorerAvailable=1"
+set "VssAdminAvailable=0"
+if exist "%VssAdminExe%" set "VssAdminAvailable=1"
+exit /b 0
+
+:VERIFY_WRITABLE_DIRECTORY
+set "WriteProbe=%~1\.wmt_write_test_%RANDOM%_%RANDOM%.tmp"
+> "%WriteProbe%" echo write-test
+if not exist "%WriteProbe%" exit /b 1
+del "%WriteProbe%" >nul 2>&1
+if exist "%WriteProbe%" exit /b 1
+exit /b 0
+
 :END
-del "%CBSStopSignal%" "%CBSReadySignal%" "%CBSDoneSignal%" "%ArchiveTimestampFile%" >nul 2>&1
-endlocal
-exit /b
+if not "%CBSCaptureLaunched%"=="1" (
+    if defined CBSStopSignal del "%CBSStopSignal%" >nul 2>&1
+    if defined CBSReadySignal del "%CBSReadySignal%" >nul 2>&1
+    if defined CBSDoneSignal del "%CBSDoneSignal%" >nul 2>&1
+)
+endlocal & exit /b %FinalExitCode%
