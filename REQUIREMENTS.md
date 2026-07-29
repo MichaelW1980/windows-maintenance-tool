@@ -1,124 +1,72 @@
-# Requirements Before Running
+# Requirements and pre-run checklist
 
-This file is a compact pre-run checklist for the Windows Repair and Component Maintenance Batch. Read the full `README.md` for detailed explanations of the modes, generated reports, limitations, archive behavior, and failure handling.
+This checklist applies to Windows Maintenance Tool v8.0.3.2. Read `README.md` for the full operating and safety details.
 
-## Required environment
+## Platform and privileges
 
 - A supported Windows installation with DISM, SFC, CBS logging, and Windows PowerShell 5.1.
-- Administrator rights. The batch requests elevation through UAC because it
-  accesses protected Windows servicing resources and, during real runs,
-  invokes DISM, SFC, component-store cleanup, Mode 3 shadow-copy deletion,
-  `/ResetBase`, and the icon-cache reset. The UAC prompt is also expected
-  during dry runs because elevation occurs when the batch starts.
-- `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` available.
-- `%SystemRoot%\System32\tar.exe` available for ZIP creation and archive inspection.
-- The following three executable files kept together in the same extracted folder:
+- Administrator rights. The batch requests elevation through UAC when necessary.
+- `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`.
+- `%SystemRoot%\System32\Dism.exe` and `%SystemRoot%\System32\sfc.exe`.
+- The .NET `System.IO.Compression.FileSystem` ZIP capability available to Windows PowerShell.
+- `vssadmin.exe` is optional outside Mode 3. If unavailable in Mode 3, the shadow-copy step is reported as not applicable and the remaining selected workflow can continue.
 
-  ```text
-  cleanup_v8.bat
-  Watch-CBSLog.ps1
-  Analyze-CBSRun.ps1
-  ```
+PowerShell Core is not required. `tar.exe` is not used.
 
-- A writable Desktop and Windows temporary-file location.
-- The package must be extracted before use. Do not run the batch from inside a ZIP viewer.
+## Keep these files together
 
-## Windows security prompts
+```text
+Windows-Maintenance-Tool.bat
+Capture-CBSLog.ps1
+Analyze-CBSLog.ps1
+Create-MaintenanceArchive.ps1
+```
 
-On Windows 11, an **Open File - Security Warning** may appear before the UAC
-prompt when the downloaded ZIP or extracted batch retains Internet-zone
-information.
+The batch locates all companion scripts relative to its own directory through `%~dp0`; the current working directory does not need to match the package directory.
 
-Before selecting **Run**, confirm that the package came from the official
-release and verify the release asset against its published SHA-256 hash.
+## Report and runtime storage
 
-The **Always ask before opening this file** checkbox controls whether Windows
-continues showing that warning for the extracted copy:
+The tool resolves Local Application Data through the Windows Known Folder API and uses only:
 
-- leave it selected to retain the warning;
-- clear it before selecting **Run** to suppress later warnings for that copy.
+```text
+%LOCALAPPDATA%\Windows Maintenance Tool\Reports
+%LOCALAPPDATA%\Windows Maintenance Tool\Runtime
+```
 
-Clearing the checkbox does not digitally sign the batch and does not suppress
-the separate UAC prompt. See `README.md` for the full explanation.
+- Timestamped working folders and validated ZIP archives are stored in `Reports`.
+- Short-lived CBS watcher signal files are stored in `Runtime`.
+- Desktop, Documents, and `%TEMP%` are not used for tool-owned files.
+- There is no automatic fallback. If either Local AppData directory cannot be created or written, initialization fails before maintenance begins.
+- Ensure that the Local AppData volume has several gigabytes of free space for ordinary runs and more after major Windows servicing activity. During ZIP creation, both the working folder and archive exist at the same time.
 
-## Dry-run default
+## Safety defaults
 
-The distributed batch is intentionally configured with:
+The distributed batch remains configured with:
 
 ```bat
 set "DryRun=1"
-```
-
-In this state, the maintenance commands are shown and logged but are not executed. Review the batch and README first. A real maintenance run requires a deliberate edit to:
-
-```bat
-set "DryRun=0"
-```
-
-## Working-folder retention default
-
-The distributed batch is configured with:
-
-```bat
 set "KeepWorkingFolder=0"
 ```
 
-Each run first creates a uniquely named, timestamped working folder on the Desktop. The complete folder is stored inside a matching ZIP archive. After the archive has been created and validated successfully, the working folder is removed by default.
+- `DryRun=1` skips DISM, SFC, shadow-copy deletion, `/ResetBase`, and icon-cache deletion while still exercising capture, report generation, and ZIP packaging.
+- Change to `DryRun=0` only after reviewing the scripts and completing a dry run.
+- `KeepWorkingFolder=0` removes the uncompressed working folder only after the ZIP has been created and deeply validated.
+- Every capture, analysis, archive, or validation failure preserves the working folder.
 
-To retain both the ZIP and the uncompressed working folder after successful validation, change the setting to:
+## Mode 3
 
-```bat
-set "KeepWorkingFolder=1"
+Mode 3 attempts shadow-copy deletion on the resolved Windows system volume, not hard-coded `C:` or `D:` targets, and then runs `/ResetBase`. It requires both the yes/no confirmation and the exact typed phrase shown by the batch. Deleted shadow copies and reset package uninstall paths cannot be restored by this tool.
+
+## End-of-run interaction
+
+Interactive runs offer to open the Reports folder with the validated ZIP selected, or the retained diagnostic folder after failure. Use:
+
+```text
+Windows-Maintenance-Tool.bat /no-open-prompt
 ```
 
-The working folder is preserved automatically whenever capture, analysis, ZIP creation, or archive validation fails, regardless of this setting.
+to suppress only that final Explorer prompt. Mode selection and destructive-operation confirmations remain interactive. Explorer launch failure never changes the maintenance exit status.
 
-## Disk-storage requirement
+## Before a real run
 
-This requirement concerns **disk storage**, not system memory or RAM.
-
-The package creates an uncompressed `CBS_Run_Capture.log` while Windows maintenance is running. The capture has no fixed maximum size. Its size depends on:
-
-- the selected maintenance mode;
-- the duration and complexity of servicing;
-- the amount of repair or component-store work performed;
-- concurrent CBS or Windows Update activity;
-- the Windows build and servicing format.
-
-In one tested Mode 2 run after a routine Windows quality update, the CBS capture reached approximately **188 MB**. This is an example, not an upper limit. Servicing around a Windows feature update, or a longer repair operation, can produce substantially more data.
-
-During archive creation and validation, free space must accommodate both:
-
-- the complete uncompressed timestamped working folder; and
-- the matching ZIP archive while it is being created and checked.
-
-Windows servicing and the archive process may also use additional temporary storage. Removing the working folder after successful validation reduces the final retained size, but it does not reduce the peak storage requirement during execution.
-
-Before a real run:
-
-- keep **several gigabytes of free space for ordinary runs**;
-- allow considerably more space when running after or around a Windows feature update;
-- check free space on the volume containing the Desktop;
-- check free space on the Windows temporary-file volume.
-
-Do not begin a real run when only a few hundred megabytes are available. Insufficient space can prevent complete capture, report generation, ZIP creation, or archive validation after maintenance has already started.
-
-## Existing Desktop reports
-
-The batch does not delete fixed-name loose reports from the Desktop. Each run uses a new timestamped folder and matching ZIP name. If the intended name is already occupied, the batch uses a suffixed non-conflicting name instead of deleting or overwriting the existing folder or archive.
-
-A failed run may leave both its timestamped working folder and a partial or unvalidated ZIP. Preserve the working folder until the failure has been understood.
-
-## Mode 3 preparation
-
-Mode 3 additionally:
-
-- attempts to delete client-accessible shadow copies on `C:` and `D:`;
-- runs `StartComponentCleanup /ResetBase`;
-- removes the former uninstall paths for Windows update packages incorporated into the new component-store baseline.
-
-Use Mode 3 only when those additional rollback resources are no longer required. Confirm that `C:` and `D:` are the intended shadow-copy targets, or edit the batch before running it.
-
-## Additional operational note
-
-All three real modes reset the icon cache near the end. Windows Explorer is restarted, so the taskbar and Desktop may briefly disappear.
+Run each selected mode with `DryRun=1` after downloading, moving, or editing the package. Confirm that elevation, companion-script discovery, Local AppData initialization, CBS capture, report generation, ZIP validation, and the final folder prompt complete successfully. Change to `DryRun=0` only after reviewing the scripts and confirming the dry run on the target system.
