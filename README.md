@@ -21,15 +21,16 @@ Choose the mode according to the maintenance goal:
    Intended for users who want the repair and documentation work of Mode 1 plus Windows' ordinary component-store cleanup. It allows Windows to remove superseded servicing material that is no longer needed, without resetting the current component base or deleting shadow copies.
 
 3. **Repair + Shadow Copy Purge + Component Base Reset**  
-   Intended for users who want the deepest cleanup scope offered by this package and deliberately accept the removal of additional rollback resources. It includes the repair work, attempts to delete shadow copies on `C:` and `D:`, and resets the component base so incorporated Windows update packages no longer retain their previous uninstall paths. It requires two confirmations.
+   Intended for users who want the deepest cleanup scope offered by this package and deliberately accept the removal of additional rollback resources. It includes the repair work, attempts to delete shadow copies on the resolved Windows system volume, and resets the component base so incorporated Windows update packages no longer retain their previous uninstall paths. It requires two confirmations.
 
-The package uses three executable files because maintenance control, live CBS logging, and report analysis are separate responsibilities:
+The package uses four executable files because maintenance control, live CBS logging, report analysis, and ZIP packaging are separate responsibilities:
 
-- `cleanup_v8.bat` — user interface, maintenance execution, safety checks, direct logging, working-folder management, and archive creation.
-- `Watch-CBSLog.ps1` — captures CBS activity produced during the run without depending on the final state of the rotating CBS log.
-- `Analyze-CBSRun.ps1` — creates the focused DISM, SFC, and cleanup reports after the maintenance run is complete.
+- `Windows-Maintenance-Tool.bat` — user interface, maintenance execution, safety checks, path initialization, direct logging, and workflow control.
+- `Capture-CBSLog.ps1` — captures CBS activity produced during the run without depending on the final state of the rotating CBS log.
+- `Analyze-CBSLog.ps1` — creates the focused DISM, SFC, and cleanup reports after the maintenance run is complete.
+- `Create-MaintenanceArchive.ps1` — creates and validates the final ZIP archive through .NET compression APIs.
 
-Each run writes its reports into a uniquely named, timestamped working folder on the current user’s Desktop. The complete folder is then stored in a matching ZIP archive, so extracting the archive recreates one clean report folder instead of placing individual files into the extraction destination.
+Each run writes its reports into a uniquely named, timestamped working folder under `%LOCALAPPDATA%\Windows Maintenance Tool\Reports`. The complete folder is then stored in a matching ZIP archive, so extracting the archive recreates one clean report folder instead of placing individual files into the extraction destination.
 
 By default, the working folder is removed only after the ZIP has been created and validated successfully. If capture, analysis, packaging, or validation fails, the working folder remains available with whatever evidence was produced.
 
@@ -38,7 +39,7 @@ By default, the working folder is removed only after the ZIP has been created an
 
 ## 1. Read this before running the batch
 
-For a compact pre-run checklist, see `REQUIREMENTS.md`. The detailed explanations remain in this README.
+For a compact pre-run checklist, see `REQUIREMENTS.md`. The detailed operating guidance remains in this README.
 
 ### Dry-run mode is enabled by default
 
@@ -145,8 +146,7 @@ coordination, report generation, and archive workflow.
 
 Mode 3 performs the same ordinary component-store cleanup covered by Mode 2 and additionally attempts to:
 
-- delete client-accessible shadow copies on `C:`;
-- delete client-accessible shadow copies on `D:`;
+- delete client-accessible shadow copies on the resolved Windows system volume;
 - reset the current component-store base with `/ResetBase`.
 
 Mode 2 already removes superseded component versions that Windows no longer needs to retain during normal cleanup. Mode 3 goes further: deleted shadow copies are no longer available for restoration, and after `/ResetBase` succeeds, Windows update packages incorporated into the new baseline can no longer be uninstalled through their previous rollback path.
@@ -179,18 +179,18 @@ During a run, all reports exist inside a timestamped working folder. While that 
 
 Additional temporary storage may also be used by Windows servicing and the archive process. Removing the working folder after successful validation reduces the final retained size, but it does not reduce this peak requirement during execution.
 
-Do not begin a real run when the Desktop volume has only a few hundred megabytes free. As a conservative operational rule, keep **several gigabytes of free space for ordinary runs**, and allow considerably more when servicing follows or accompanies a Windows feature update. Also ensure that the Windows temporary-file location has adequate free space.
+Do not begin a real run when the volume containing `%LOCALAPPDATA%` has only a few hundred megabytes free. As a conservative operational rule, keep **several gigabytes of free space for ordinary runs**, and allow considerably more when servicing follows or accompanies a Windows feature update. Also ensure that the Windows temporary-file location has adequate free space.
 
 Insufficient free space can prevent complete capture, report creation, archive creation, or archive validation even if some maintenance commands have already run. In that case, the timestamped working folder is retained for recovery and inspection.
 
 ### Each run uses its own timestamped working folder
 
-The batch does not write fixed-name loose reports directly onto the Desktop and does not delete stale reports from earlier runs.
+The batch does not write reports to Desktop, Documents, or `%TEMP%`, and it does not delete stale reports from earlier runs.
 
 A run uses a structure such as:
 
 ```text
-Desktop\
+%LOCALAPPDATA%\Windows Maintenance Tool\Reports\
 ├── cleanup-report_YYYY-MM-DD_HH-MM-SS\
 │   ├── Maintenance_Mode_Log.txt
 │   ├── CBS_Run_Capture.log
@@ -209,21 +209,26 @@ rather than scattering the reports into the selected extraction location.
 
 If the intended timestamped name already exists, the batch must choose a non-conflicting suffixed name instead of overwriting or deleting the existing folder or archive.
 
+The tool also uses `%LOCALAPPDATA%\Windows Maintenance Tool\Runtime` for short-lived CBS watcher coordination signals. It does not fall back to Desktop, Documents, or `%TEMP%`. If the Local AppData directories cannot be created or written, initialization fails before maintenance begins.
+
+After finalization, interactive runs offer to open the Reports folder with the validated ZIP selected, or the retained diagnostic folder after failure. The optional `/no-open-prompt` switch suppresses only this final Explorer prompt; mode selection and safety confirmations remain interactive.
+
 ### Explorer is restarted during real runs
 
-All three real modes reset the icon cache near the end. Windows Explorer is terminated and restarted, so the taskbar and desktop may briefly disappear.
+All three real modes attempt an icon-cache reset near the end. If matching cache files exist and Explorer is running, Explorer is terminated and restarted, so the taskbar and desktop may briefly disappear. A missing cache directory, missing cache files, or an already-stopped Explorer process is treated as not applicable rather than as a fatal condition.
 
 ---
 
 ## 2. Quick start
 
 1. Extract the complete package to a normal folder. Do not run it from inside a ZIP viewer.
-2. Keep the three executable files together:
+2. Keep the four executable files together:
 
    ```text
-   cleanup_v8.bat
-   Watch-CBSLog.ps1
-   Analyze-CBSRun.ps1
+   Windows-Maintenance-Tool.bat
+   Capture-CBSLog.ps1
+   Analyze-CBSLog.ps1
+   Create-MaintenanceArchive.ps1
    ```
 
 3. Confirm that the batch contains:
@@ -233,7 +238,7 @@ All three real modes reset the icon cache near the end. Windows Explorer is term
    set "KeepWorkingFolder=0"
    ```
 
-4. Run `cleanup_v8.bat`.
+4. Run `Windows-Maintenance-Tool.bat`.
 5. If Windows displays an **Open File - Security Warning**, confirm the
    package source and published SHA-256 hash, decide whether Windows should
    continue asking before opening that copy, and select **Run**.
@@ -256,7 +261,7 @@ The modes build on one another. Mode 1 focuses on checking, repair, and document
 |---|---|---|
 | Mode 1 | The main need is to check and repair Windows servicing and protected system files, and to retain focused DISM and SFC documentation. | Does not run component-store cleanup, delete shadow copies, or reset the component base. |
 | Mode 2 | The repair and documentation work of Mode 1 is wanted together with ordinary cleanup of superseded component-store material. | Windows may remove superseded component versions and related servicing payloads that normal `StartComponentCleanup` determines are no longer required. Shadow copies and the current component base are left unchanged. |
-| Mode 3 | The deepest cleanup scope in this package is wanted, and the user has deliberately decided that selected shadow copies and previous uninstall paths for Windows update packages are no longer needed. | Includes the cleanup scope of Mode 2, attempts to delete shadow copies on `C:` and `D:`, and uses `/ResetBase` so incorporated Windows update packages no longer retain their former uninstall paths. |
+| Mode 3 | The deepest cleanup scope in this package is wanted, and the user has deliberately decided that selected shadow copies and previous uninstall paths for Windows update packages are no longer needed. | Includes the cleanup scope of Mode 2, attempts to delete shadow copies on the resolved Windows system volume, and uses `/ResetBase` so incorporated Windows update packages no longer retain their former uninstall paths. |
 
 The distinction is therefore based on both **maintenance purpose** and **how much rollback material should be retained**.
 
@@ -356,24 +361,21 @@ Mode 3 is therefore suited to a deliberate maintenance event, not simply to rout
 
 1. `DISM /Online /Cleanup-Image /ScanHealth`
 2. `DISM /Online /Cleanup-Image /RestoreHealth`
-3. Attempt `vssadmin delete shadows /for=C: /all /quiet`
-4. Attempt `vssadmin delete shadows /for=D: /all /quiet`
-5. `DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase`
-6. `SFC /scannow`
-7. Icon-cache reset
+3. Attempt `vssadmin delete shadows /for=<resolved-system-volume> /all /quiet`
+4. `DISM /Online /Cleanup-Image /StartComponentCleanup /ResetBase`
+5. `SFC /scannow`
+6. Icon-cache reset
 
 ### What Mode 3 removes in addition to Mode 2
 
-- Client-accessible shadow copies on `C:`, if the VSS deletion command succeeds.
-- Client-accessible shadow copies on `D:`, if that volume exists and the VSS deletion command succeeds.
+- Client-accessible shadow copies on the resolved Windows system volume, if the VSS deletion command succeeds.
 - The former uninstall paths for Windows update packages incorporated into the new `/ResetBase` baseline.
 
 After these operations:
 
 - deleted shadow copies are no longer available for restoration through those snapshots;
 - Windows update packages incorporated into the reset baseline can no longer be uninstalled through their former uninstall paths;
-- future Windows updates can still be installed normally;
-- a missing, unsupported, or otherwise unsuitable `D:` target may produce a nonzero VSS exit code even if the remaining Mode 3 operations succeed.
+- future Windows updates can still be installed normally.
 
 Mode 3 requires both a yes/no confirmation and the exact typed confirmation phrase documented earlier.
 
@@ -391,13 +393,13 @@ Component_Base_Reset_Log.txt
 
 ---
 
-## 4. Why the package contains three executable files
+## 4. Why the package contains four executable files
 
-The three files are not three separate tools the user must operate individually. The batch file is the entry point. It calls the two PowerShell helpers automatically.
+The four files are not separate tools the user must operate individually. The batch file is the entry point. It calls the three PowerShell helpers automatically.
 
 The separation keeps each responsibility clear and independently testable.
 
-## `cleanup_v8.bat` — maintenance controller
+## `Windows-Maintenance-Tool.bat` — maintenance controller
 
 This is the file the user launches.
 
@@ -413,14 +415,14 @@ It is responsible for:
 - invoking the report analyzer after logging is complete;
 - checking that the reports expected for the selected mode exist;
 - creating a unique timestamped working folder for each run;
-- archiving that complete folder as a matching ZIP;
+- invoking the dedicated archive helper;
 - validating the archive before removing the working folder;
 - retaining the working folder whenever packaging or validation fails;
 - honoring the `KeepWorkingFolder` setting after successful validation.
 
 The batch does not interpret the contents of CBS records.
 
-## `Watch-CBSLog.ps1` — reliable live CBS capture
+## `Capture-CBSLog.ps1` — reliable live CBS capture
 
 Windows servicing writes detailed operational records to CBS logs. Those logs can grow, rotate, and be replaced during a long maintenance run. Copying only the final `CBS.log` afterward could therefore omit records that existed earlier in the run.
 
@@ -435,7 +437,7 @@ The watcher exists to preserve the servicing evidence generated while the select
 
 Its output is `CBS_Run_Capture.log`.
 
-## `Analyze-CBSRun.ps1` — focused report generator
+## `Analyze-CBSLog.ps1` — focused report generator
 
 CBS logs are detailed and can be very large. The analyzer creates smaller reports that collect records relevant to the selected maintenance operations.
 
@@ -463,7 +465,12 @@ The division of responsibilities is therefore:
 Batch file       -> selects and performs maintenance
 CBS watcher      -> preserves servicing evidence from the run
 CBS analyzer     -> creates focused reports from that evidence
+Archive helper   -> creates and validates the ZIP
 ```
+
+## `Create-MaintenanceArchive.ps1` — ZIP transaction and validation
+
+The archive helper uses `.NET System.IO.Compression` rather than `tar.exe`. It verifies the source folder and expected mode-specific files, creates a ZIP containing the timestamped root folder, reopens the archive, reads every archived file fully, checks the exact expected file set, and compares each archived uncompressed length with its source file. A partial archive created by the helper is removed after a creation or validation failure. The batch deletes the working folder only after this helper returns exit code `0`.
 
 ---
 
@@ -555,8 +562,8 @@ The archive is treated as successful only after validation confirms that it can 
 
 For the selected mode, the batch:
 
-1. verifies that both PowerShell helpers and the required archive utility are present;
-2. creates a unique timestamped working folder on the Desktop;
+1. verifies Windows PowerShell 5.1, DISM, SFC, all three PowerShell helpers, and the .NET ZIP capability;
+2. resolves Local Application Data through the Windows Known Folder API and creates a unique working folder under `%LOCALAPPDATA%\Windows Maintenance Tool\Reports`;
 3. places all run-specific logs and reports inside that folder;
 4. starts the CBS watcher and waits until it is ready;
 5. executes the selected maintenance sequence, or skips it in dry-run mode;
@@ -577,11 +584,10 @@ If capture cannot start, maintenance is not started. If analysis, archive creati
 - Windows with DISM, SFC, CBS logging, and Windows PowerShell 5.1.
 - Administrator rights.
 - `%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe` available.
-- Windows `tar.exe` available for ZIP creation and archive inspection.
-- All three executable files kept together.
-- A writable Desktop and temporary directory.
-- Sufficient free space on the Desktop and temporary-file volumes for the timestamped working folder, ZIP archive, and archive-processing overhead.
-- Mode 3 is configured to attempt shadow-copy deletion on both `C:` and `D:`. Edit the batch if those are not the intended volumes.
+- All four executable files kept together.
+- A writable `%LOCALAPPDATA%\Windows Maintenance Tool\Reports` directory and `%LOCALAPPDATA%\Windows Maintenance Tool\Runtime` directory.
+- Sufficient free space on the Local AppData volume for the working folder, ZIP archive, and archive-processing overhead.
+- Mode 3 targets the resolved Windows system volume rather than assuming `C:` or `D:`.
 
 PowerShell Core is not required and is not used.
 
@@ -623,7 +629,7 @@ Command exit codes, focused reports, and the raw capture should be considered to
 
 ## 9. Failure behavior
 
-- If either PowerShell helper is missing, maintenance is not started.
+- If any required PowerShell helper is missing, maintenance is not started.
 - If watcher readiness times out, maintenance is not started.
 - If the watcher fails, it writes `CBS_Run_Capture.log.error.txt` where possible.
 - If watcher shutdown confirmation times out, the batch warns and continues finalization attempts.
@@ -634,40 +640,26 @@ Command exit codes, focused reports, and the raw capture should be considered to
 
 ---
 
-## 10. Validation status
+## 10. Verifying a run
 
-The maintenance, watcher, analyzer, and v8 packaging architecture has been tested through:
+A successful run should finish with all of the following:
 
-- an all-modes offline analyzer regression harness;
-- 51 successful regression checks with no failures on a known detailed capture;
-- dry-run execution of Modes 1, 2, and 3;
-- real execution of Modes 1, 2, and 3 on the development system;
-- cleanup examples containing 602 complete correlated chains, 1 complete chain, and 0 chains;
-- Mode 1 cleanup-report suppression;
-- watcher startup, live capture, stop, and final flush;
-- correct mode-specific report generation;
-- timestamped working-folder and whole-folder ZIP creation;
-- exact mode-specific archive-content validation; and
-- post-validation working-folder removal with `KeepWorkingFolder=0`.
+- the selected maintenance workflow reaches finalization;
+- `Capture-CBSLog.ps1` stops and flushes its run-scoped capture;
+- `Analyze-CBSLog.ps1` creates the expected reports for the selected mode;
+- `Create-MaintenanceArchive.ps1` creates and validates the ZIP archive;
+- the batch displays the exact validated archive path; and
+- when `KeepWorkingFolder=0`, the uncompressed working folder is removed only after archive validation succeeds.
 
-The v8 packaging path was exercised successfully on Windows through real executions of all three modes on July 26, 2026. Each run produced one ZIP containing a single matching timestamped root folder and exactly the expected mode-specific file set. In all three runs, the validated ZIP remained and the uncompressed working folder was removed as configured.
+The final ZIP should contain one timestamped top-level report folder. Its expected files are:
 
-The real-run validation archives were:
+- Mode 1: `CBS_Run_Capture.log`, `DISM_Repair_Details.txt`, `Maintenance_Mode_Log.txt`, and `SFC_Details.txt`;
+- Mode 2: all Mode 1 files plus `Cleanup_Details.txt` and `Cleanup_Content_Retention_Details.txt`;
+- Mode 3: all Mode 2 files plus `Component_Base_Reset_Log.txt`.
 
-- Mode 1: `cleanup-report_2026-07-26_16-58-25.zip`  
-  SHA-256: `f27616251b9c3be2e9186aff20071ab65c713a5ef788e8c3993b1f3e0959caa1`
-- Mode 2: `cleanup-report_2026-07-26_17-07-26.zip`  
-  SHA-256: `615d63fe61db484bce5e90c1c956e21ba981d100e54d9d7c628323d3e154d01c`
-- Mode 3: `cleanup-report_2026-07-26_17-18-11.zip`  
-  SHA-256: `9b6185339d75b531bb66879779d6c7d53502c4a5ac980a8479f033f8a5b62423`
+If maintenance, capture, analysis, archive creation, or archive validation fails, inspect the retained working folder shown by the batch. Do not treat a partial or unvalidated ZIP as a completed report.
 
-Post-run review of the Mode 3 system CBS log confirmed that records written after the captured final SFC line were limited to TrustedInstaller/TiWorker automatic shutdown, completion confirmation for outstanding sessions, cache statistics, and component finalization. No additional maintenance result or failure was omitted from the run capture.
-
-The timestamp-collision suffix path and deliberately forced capture, analysis, archive, validation, or removal failures were not triggered as part of these three real runs. Their safeguards remain implemented and documented, but those exceptional branches should not be described as exhaustively Windows-tested.
-
-On the tested development system, the completed validation is sufficient for this v8 package to be treated as the canonical release.
-
-Successful validation provides confidence in the tested configuration but cannot guarantee identical behavior on every Windows build or future servicing format.
+The current console output may print archive success once from the archive helper and once from the batch. In Mode 3, the timestamp beside the VSS exit code in `Maintenance_Mode_Log.txt` may represent the command-start time; `Component_Base_Reset_Log.txt` contains the more detailed VSS timing. These are presentation details and do not change the recorded exit code or archive-validation result.
 
 ---
 
