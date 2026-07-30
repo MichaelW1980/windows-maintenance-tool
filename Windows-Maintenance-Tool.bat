@@ -2,7 +2,7 @@
 CLS
 setlocal EnableExtensions EnableDelayedExpansion
 
-:: Windows Maintenance Tool - v8.0.3.2 standardized filenames
+:: Windows Maintenance Tool - v8.0.3.3
 
 set "DryRun=1"
 set "KeepWorkingFolder=0"
@@ -254,8 +254,9 @@ set /p "ConfirmText=Confirmation: "
 if /i "%ConfirmText%"=="DELETE SHADOW COPIES AND RESET COMPONENT BASE" goto COMPONENT_BASE_RESET_MODE
 
 echo.
-echo Extended cleanup mode not confirmed. Returning to selection menu.
-choice /c C /n /m "Press C to continue: " >nul
+echo Extended cleanup mode not confirmed!
+echo Returning to selection menu...
+timeout /t 3 /nobreak >nul
 goto MENU
 
 :COMPONENT_BASE_RESET_MODE
