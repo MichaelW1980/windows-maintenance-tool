@@ -1,6 +1,6 @@
 # Requirements and pre-run checklist
 
-This checklist applies to Windows Maintenance Tool v8.0.3.2. Read `README.md` for the full operating and safety details.
+This checklist applies to Windows Maintenance Tool v8.0.3.3. Read `README.md` for the full operating and safety details.
 
 ## Platform and privileges
 
