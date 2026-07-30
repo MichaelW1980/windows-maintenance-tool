@@ -149,7 +149,7 @@ Mode 3 performs the same ordinary component-store cleanup covered by Mode 2 and 
 - delete client-accessible shadow copies on the resolved Windows system volume;
 - reset the current component-store base with `/ResetBase`.
 
-Mode 2 already removes superseded component versions that Windows no longer needs to retain during normal cleanup. Mode 3 goes further: deleted shadow copies are no longer available for restoration, and after `/ResetBase` succeeds, Windows update packages incorporated into the new baseline can no longer be uninstalled through their previous rollback path.
+Mode 2 already performs permanent removal of superseded component versions eligible for ordinary cleanup, and running it manually bypasses the scheduled task's normal grace period. Mode 3 goes further: deleted shadow copies are no longer available for restoration, and after `/ResetBase` succeeds, Windows update packages incorporated into the new baseline can no longer be uninstalled through their previous rollback path.
 
 Mode 3 therefore requires:
 
@@ -260,7 +260,7 @@ The modes build on one another. Mode 1 focuses on checking, repair, and document
 | Mode | Choose this mode when... | Cleanup and rollback effect |
 |---|---|---|
 | Mode 1 | The main need is to check and repair Windows servicing and protected system files, and to retain focused DISM and SFC documentation. | Does not run component-store cleanup, delete shadow copies, or reset the component base. |
-| Mode 2 | The repair and documentation work of Mode 1 is wanted together with ordinary cleanup of superseded component-store material. | Windows may remove superseded component versions and related servicing payloads that normal `StartComponentCleanup` determines are no longer required. Shadow copies and the current component base are left unchanged. |
+| Mode 2 | You deliberately want to perform ordinary Windows component-store cleanup now rather than waiting for scheduled maintenance, and accept permanent removal of the superseded component versions selected by the servicing stack. | Removes superseded Windows component versions that are eligible for ordinary component-store cleanup. Running the cleanup manually bypasses the scheduled task's normal grace period. It does not delete shadow copies or reset the component base. |
 | Mode 3 | The deepest cleanup scope in this package is wanted, and the user has deliberately decided that selected shadow copies and previous uninstall paths for Windows update packages are no longer needed. | Includes the cleanup scope of Mode 2, attempts to delete shadow copies on the resolved Windows system volume, and uses `/ResetBase` so incorporated Windows update packages no longer retain their former uninstall paths. |
 
 The distinction is therefore based on both **maintenance purpose** and **how much rollback material should be retained**.
@@ -308,9 +308,9 @@ Cleanup reports are intentionally not generated in Mode 1.
 
 ### When to choose Mode 2
 
-Choose Mode 2 when the repair and documentation work of Mode 1 is wanted together with Windows' ordinary component-store cleanup.
+Choose Mode 2 when you deliberately want to perform ordinary Windows component-store cleanup now rather than waiting for scheduled maintenance, and you accept permanent removal of the superseded component versions selected by the servicing stack.
 
-This can be useful after servicing activity has accumulated superseded component versions, or whenever the user wants Windows to remove component-store material that its normal cleanup process considers no longer necessary, while retaining the current component base and leaving shadow copies untouched.
+This can be useful after servicing activity has accumulated superseded component versions, while retaining the current component base and leaving shadow copies untouched.
 
 ### Operations
 
@@ -322,19 +322,19 @@ This can be useful after servicing activity has accumulated superseded component
 
 ### What Mode 2 removes
 
-Mode 2 allows Windows servicing to remove:
+Mode 2 runs:
 
-- superseded component versions;
-- related servicing payloads that ordinary `StartComponentCleanup` determines are no longer required;
-- some older fallback material associated with those superseded components.
+`DISM /Online /Cleanup-Image /StartComponentCleanup`
 
-Mode 2 does not:
+This performs Windows component-store cleanup. It removes superseded versions of Windows components that have been replaced by newer servicing versions and are no longer required as the active component version.
 
-- use `/ResetBase`;
-- delete shadow copies;
-- remove the former uninstall paths of Windows update packages by establishing a new component base.
+Windows also performs this type of cleanup through its scheduled `StartComponentCleanup` maintenance task. The scheduled task normally retains superseded component versions for a grace period before removing them. Running the DISM command manually performs comparable cleanup immediately, without the scheduled task's 30-day grace period or one-hour execution limit.
 
-It is the package's ordinary component-store cleanup mode.
+The removed data can include older component payloads, manifests, metadata, and other servicing material associated with superseded component versions. Exactly what Windows removes is determined by the servicing stack and the current state of the component store.
+
+This is permanent removal of superseded component-store data. It is not merely temporary-file deletion. However, Mode 2 does not use `/ResetBase`, does not delete shadow copies, and does not force every currently superseded component version into a newly fixed baseline.
+
+Mode 2 therefore performs ordinary component-store cleanup earlier and without the normal scheduled grace period, while Mode 3 additionally resets the component base and removes further rollback capability.
 
 ### Generated archive contents
 
